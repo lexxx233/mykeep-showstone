@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Showstone</title>
+<style>
+  :root{--ink:#1c2833;--muted:#6b7785;--line:#e3e8ee;--bg:#f7f9fb;--card:#fff;--violet:#5b4b8a;--gold:#b5892b;--bad:#b23b3b}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--bg);line-height:1.5}
+  header{display:flex;align-items:center;gap:.7rem;padding:.7rem 1.1rem;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0}
+  .brand{font-weight:700;font-size:1.1rem}.brand .s{color:var(--violet)}
+  .tag{color:var(--muted);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase}
+  .spacer{flex:1}
+  button{font:inherit;cursor:pointer;border:1px solid var(--violet);background:var(--violet);color:#fff;padding:.45rem .8rem;border-radius:7px}
+  button.ghost{background:#fff;color:var(--violet)}button.danger{border-color:var(--bad);background:#fff;color:var(--bad)}
+  button.tiny{padding:.2rem .55rem;font-size:.82rem}
+  input{font:inherit;padding:.45rem .55rem;border:1px solid var(--line);border-radius:7px;width:100%}
+  label{display:block;font-size:.78rem;color:var(--muted);margin:.5rem 0 .15rem}
+  .wrap{max-width:54rem;margin:0 auto;padding:1.1rem}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1rem 1.1rem;margin-bottom:1.1rem}
+  .card h2{margin:.1rem 0 .5rem;font-size:1rem}
+  .sub{color:var(--muted);font-size:.85rem;margin:.1rem 0 .7rem}
+  .row{display:flex;gap:.5rem;align-items:center}
+  .list{border:1px solid var(--line);border-radius:8px;max-height:280px;overflow:auto}
+  .item{padding:.5rem .6rem;border-bottom:1px solid var(--line);font-size:.88rem}.item:last-child{border-bottom:0}
+  .item .meta{color:var(--muted);font-size:.75rem}
+  .empty{padding:1rem;color:var(--muted);text-align:center;font-size:.85rem}
+  .approval{background:#fff7e6;border:1px solid #f0d79a;border-radius:8px;padding:.6rem .7rem;margin-bottom:.6rem}
+  pre.snip{background:#221b33;color:#e4dcf3;padding:.7rem .8rem;border-radius:8px;font-size:.78rem;white-space:pre-wrap;overflow:auto}
+  code{background:#eef;padding:.08em .35em;border-radius:4px}
+  .lockwrap{min-height:70vh;display:flex;align-items:center;justify-content:center}
+  .lockcard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:1.6rem;max-width:25rem;width:100%}
+  .warn{background:#fbeaea;border:1px solid #e7bcbc;color:#7a2b2b;font-size:.8rem;padding:.55rem .7rem;border-radius:8px;margin:.6rem 0}
+  .err{color:var(--bad);font-size:.83rem;min-height:1.1rem}
+  .hidden{display:none}
+  .pill{font-size:.72rem;padding:.15rem .55rem;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+</style>
+</head>
+<body>
+<header>
+  <span class="brand">🔮 Show<span class="s">stone</span></span>
+  <span class="tag">Personal · Private · Portable</span>
+  <span class="spacer"></span>
+  <span id="strictPill" class="pill hidden"></span>
+  <button id="lockBtn" class="ghost hidden" onclick="doLock()">Lock</button>
+</header>
+
+<div id="lockView" class="lockwrap hidden">
+  <div class="lockcard">
+    <h2 id="lockTitle" style="margin-top:0">Unlock Showstone</h2>
+    <p class="sub" id="lockSub">Enter your password to unlock the browser profile.</p>
+    <div id="firstWarn" class="warn hidden">First launch — this password protects your browser profile (logins, cookies) on the stick. <strong>No recovery</strong> if lost.</div>
+    <input id="pw" type="password" placeholder="Password" onkeydown="if(event.key==='Enter')doUnlock()">
+    <div class="err" id="lockErr"></div>
+    <div class="row" style="margin-top:.5rem"><button id="unlockBtn" onclick="doUnlock()">Unlock</button><span id="lockBusy" class="tag"></span></div>
+  </div>
+</div>
+
+<div id="appView" class="wrap hidden">
+  <section class="card">
+    <h2>Give this to your agent</h2>
+    <p class="sub">Any AI agent with an HTTP tool can drive the browser. Sensitive actions pause here for your approval.</p>
+    <pre class="snip" id="snip">…</pre>
+  </section>
+
+  <section class="card">
+    <h2>Approvals</h2>
+    <p class="sub">The agent pauses on sensitive actions (purchases, posts, deletes, passwords, downloads). Approve or deny here.</p>
+    <div id="approvals"><div class="empty">No pending actions.</div></div>
+  </section>
+
+  <section class="card">
+    <h2>Controls</h2>
+    <div class="row" style="flex-wrap:wrap;gap:.6rem">
+      <label style="margin:0"><input type="checkbox" id="strictBox" onchange="setStrict()" style="width:auto"> Strict mode (approve everything)</label>
+      <span class="spacer"></span>
+      <button class="danger tiny" onclick="clearSession()">Clear session (logout all sites)</button>
+    </div>
+    <label>Trust a host (auto-approve routine actions there)</label>
+    <div class="row"><input id="trustHost" placeholder="example.com"><button class="tiny" onclick="addTrust()">Trust</button></div>
+    <div id="trusted" class="sub" style="margin-top:.5rem"></div>
+  </section>
+
+  <section class="card">
+    <h2>Audit</h2>
+    <div class="list" id="audit"><div class="empty">No actions yet.</div></div>
+  </section>
+</div>
+
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>(s==null?'':String(s)).replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+async function jget(u){return (await fetch(u)).json();}
+async function jsend(m,u,b){const r=await fetch(u,{method:m,headers:b?{'Content-Type':'application/json'}:{},body:b?JSON.stringify(b):undefined});let j={};try{j=await r.json();}catch(_){}return{ok:r.ok,status:r.status,j};}
+let firstLaunch=false,poll=null;
+
+async function refresh(){
+  const st=await jget('/api/state');
+  firstLaunch=!!st.first_launch;
+  if(st.unlocked){showApp();}else{showLock(st);}
+}
+function showLock(st){
+  $('#appView').classList.add('hidden');$('#lockBtn').classList.add('hidden');$('#lockView').classList.remove('hidden');
+  if(poll){clearInterval(poll);poll=null;}
+  $('#firstWarn').classList.toggle('hidden',!firstLaunch);
+  $('#lockTitle').textContent=firstLaunch?'Set up Showstone':'Unlock Showstone';
+  $('#unlockBtn').textContent=firstLaunch?'Create & unlock':'Unlock';
+  if(st.loading){$('#lockBusy').textContent=st.download_pct>0?('downloading browser… '+st.download_pct+'%'):'launching…';setTimeout(refresh,800);}
+}
+async function doUnlock(){
+  const pw=$('#pw').value;if(!pw){$('#lockErr').textContent='Password required.';return;}
+  $('#lockErr').textContent='';$('#unlockBtn').disabled=true;
+  $('#lockBusy').textContent=firstLaunch?'setting up — may download the browser (~150 MB, first launch)…':'unlocking…';
+  const tick=setInterval(async()=>{const s=await jget('/api/state');if(s.loading&&s.download_pct>0)$('#lockBusy').textContent='downloading browser… '+s.download_pct+'%';},700);
+  const {ok,j}=await jsend('POST',firstLaunch?'/api/setup':'/api/unlock',{password:pw});
+  clearInterval(tick);$('#unlockBtn').disabled=false;$('#lockBusy').textContent='';
+  if(!ok){$('#lockErr').textContent=j.error||'failed';return;}
+  $('#pw').value='';showApp();
+}
+const doLock=async()=>{await jsend('POST','/api/lock');refresh();};
+
+async function showApp(){
+  $('#lockView').classList.add('hidden');$('#appView').classList.remove('hidden');$('#lockBtn').classList.remove('hidden');
+  loadSnippet();loadCtrl();loadAudit();loadApprovals();
+  if(!poll)poll=setInterval(()=>{loadApprovals();loadAudit();},2000);
+}
+async function loadSnippet(){const j=await jget('/api/snippet');$('#snip').textContent=j.snippet||'';}
+async function loadApprovals(){
+  const {ok,j}=await jsend('GET','/api/showstone/approvals');if(!ok)return;
+  const p=j.pending||[];
+  $('#approvals').innerHTML=p.length?p.map(a=>`<div class="approval"><div><strong>${esc(a.action)}</strong> on <strong>${esc(a.host||'this page')}</strong> <span class="meta">${esc(a.label||'')}</span></div><div class="row" style="margin-top:.4rem"><button class="tiny" onclick="decide('${esc(a.id)}',true)">Approve</button><button class="danger tiny" onclick="decide('${esc(a.id)}',false)">Deny</button></div></div>`).join(''):'<div class="empty">No pending actions.</div>';
+}
+const decide=async(id,ok)=>{await jsend('POST','/api/showstone/approvals/'+encodeURIComponent(id)+'/decide',{approve:ok});loadApprovals();};
+async function loadCtrl(){
+  const {ok,j}=await jsend('GET','/api/showstone/state');if(!ok)return;
+  $('#strictBox').checked=!!j.strict;
+  $('#strictPill').classList.toggle('hidden',!j.strict);$('#strictPill').textContent='strict';
+  const t=j.trusted_hosts||[];
+  $('#trusted').innerHTML=t.length?('Trusted: '+t.map(h=>`<code>${esc(h)}</code> <a href="#" onclick="rmTrust('${esc(h)}');return false">✕</a>`).join('  ')):'No trusted hosts.';
+}
+const setStrict=async()=>{await jsend('POST','/api/showstone/strict',{on:$('#strictBox').checked});loadCtrl();};
+const addTrust=async()=>{const h=$('#trustHost').value.trim();if(!h)return;await jsend('POST','/api/showstone/trust',{host:h,trusted:true});$('#trustHost').value='';loadCtrl();};
+const rmTrust=async h=>{await jsend('POST','/api/showstone/trust',{host:h,trusted:false});loadCtrl();};
+const clearSession=async()=>{if(confirm('Log out of all sites in the Showstone profile?')){await jsend('POST','/api/showstone/session/clear');loadCtrl();}};
+async function loadAudit(){
+  const {ok,j}=await jsend('GET','/api/showstone/audit');if(!ok)return;
+  const a=(j.audit||[]).slice(-30).reverse();
+  $('#audit').innerHTML=a.length?a.map(e=>`<div class="item">${esc(e.action)} ${esc(e.host||'')} <span class="meta">→ ${esc(e.decision)} · ${esc((e.t||'').replace('T',' ').replace(/\..*/,''))}</span></div>`).join(''):'<div class="empty">No actions yet.</div>';
+}
+refresh();
+</script>
+</body>
+</html>

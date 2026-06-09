@@ -1,0 +1,6 @@
+/bin/
+/dist/
+mykeep_kb/
+.showstone-live/
+*.log
+.DS_Store

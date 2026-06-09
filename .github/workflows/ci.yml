@@ -1,0 +1,38 @@
+name: CI
+on: [push, pull_request]
+
+# The live-Chromium tests are gated on SHOWSTONE_LIVE (unset here), so CI never downloads
+# the ~150 MB engine; it builds, vets, unit-tests, proves zero CGo, and cross-compiles.
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.26.x' }
+      - run: go vet ./...
+      - run: go test ./...
+      - name: no-CGo guard
+        run: CC=/bin/false CGO_ENABLED=0 go build ./...
+
+  cross-compile:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - { os: windows, arch: amd64 }
+          - { os: windows, arch: arm64 }
+          - { os: darwin,  arch: amd64 }
+          - { os: darwin,  arch: arm64 }
+          - { os: linux,   arch: amd64 }
+          - { os: linux,   arch: arm64 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with: { go-version: '1.26.x' }
+      - name: build ${{ matrix.target.os }}/${{ matrix.target.arch }}
+        env:
+          CGO_ENABLED: '0'
+          GOOS: ${{ matrix.target.os }}
+          GOARCH: ${{ matrix.target.arch }}
+        run: go build -trimpath -ldflags="-s -w" ./cmd/showstone
