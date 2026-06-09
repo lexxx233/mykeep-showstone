@@ -5,41 +5,63 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Showstone</title>
 <style>
-  :root{--ink:#1c2833;--muted:#6b7785;--line:#e3e8ee;--bg:#f7f9fb;--card:#fff;--violet:#5b4b8a;--gold:#b5892b;--bad:#b23b3b}
+  /* Clean-technical theme — system fonts only, renders identically offline. */
+  :root{
+    --bg:#0a0a0b; --panel:#121214; --panel-2:#161619;
+    --line:rgba(255,255,255,.09); --line-2:rgba(255,255,255,.16);
+    --text:#ededf0; --muted:#9a9aa4; --faint:#6b6b75;
+    --accent:#5e9eff; --accent-soft:rgba(94,158,255,.14); --accent-line:rgba(94,158,255,.4);
+    --warn:#e0b341; --warn-soft:rgba(224,179,65,.12); --bad:#ff7a6b;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Roboto,Helvetica,Arial,sans-serif;
+    color-scheme:dark;
+  }
   *{box-sizing:border-box}
-  body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--bg);line-height:1.5}
-  header{display:flex;align-items:center;gap:.7rem;padding:.7rem 1.1rem;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:0}
-  .brand{font-weight:700;font-size:1.1rem}.brand .s{color:var(--violet)}
-  .tag{color:var(--muted);font-size:.72rem;letter-spacing:.08em;text-transform:uppercase}
+  body{margin:0;font-family:var(--sans);color:var(--text);background:var(--bg);line-height:1.5;-webkit-font-smoothing:antialiased}
+  body::before{content:"";position:fixed;inset:0;z-index:-1;pointer-events:none;
+    background:radial-gradient(80% 50% at 50% -10%,rgba(94,158,255,.07),transparent 70%)}
+  ::selection{background:var(--accent-soft)}
+  header{display:flex;align-items:center;gap:.7rem;padding:.7rem 1.1rem;background:rgba(10,10,11,.72);
+    backdrop-filter:saturate(180%) blur(12px);border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+  .brand{display:inline-flex;align-items:center;gap:.5rem;font-family:var(--mono);font-weight:600;font-size:1rem;letter-spacing:-.01em}
+  .brand .sq{width:22px;height:22px;border-radius:6px;border:1px solid var(--accent-line);background:var(--accent-soft);display:grid;place-items:center;font-size:.8rem}
+  .brand .s{color:var(--accent)}
+  .tag{font-family:var(--mono);color:var(--faint);font-size:.68rem;letter-spacing:.06em}
   .spacer{flex:1}
-  button{font:inherit;cursor:pointer;border:1px solid var(--violet);background:var(--violet);color:#fff;padding:.45rem .8rem;border-radius:7px}
-  button.ghost{background:#fff;color:var(--violet)}button.danger{border-color:var(--bad);background:#fff;color:var(--bad)}
-  button.tiny{padding:.2rem .55rem;font-size:.82rem}
-  input{font:inherit;padding:.45rem .55rem;border:1px solid var(--line);border-radius:7px;width:100%}
+  button{font:inherit;font-weight:550;cursor:pointer;border:1px solid var(--accent);background:var(--accent);color:#06121f;padding:.45rem .85rem;border-radius:8px;transition:.16s ease}
+  button:hover{filter:brightness(1.06);transform:translateY(-1px)}
+  button.ghost{background:var(--panel);color:var(--text);border:1px solid var(--line-2)}
+  button.ghost:hover{border-color:var(--accent-line);background:var(--accent-soft)}
+  button.danger{border-color:rgba(255,122,107,.5);background:var(--panel);color:var(--bad)}
+  button.tiny{padding:.22rem .6rem;font-size:.8rem;border-radius:6px}
+  input{font:inherit;padding:.5rem .6rem;border:1px solid var(--line);border-radius:8px;width:100%;background:var(--bg);color:var(--text)}
+  input:focus{outline:none;border-color:var(--accent-line)}
+  input::placeholder{color:var(--faint)}
   label{display:block;font-size:.78rem;color:var(--muted);margin:.5rem 0 .15rem}
-  .wrap{max-width:54rem;margin:0 auto;padding:1.1rem}
-  .card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1rem 1.1rem;margin-bottom:1.1rem}
-  .card h2{margin:.1rem 0 .5rem;font-size:1rem}
+  .wrap{max-width:54rem;margin:0 auto;padding:1.2rem}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:1.1rem 1.2rem;margin-bottom:1.1rem}
+  .card h2{margin:.1rem 0 .5rem;font-family:var(--mono);font-size:.72rem;text-transform:uppercase;letter-spacing:.12em;color:var(--muted);font-weight:500}
   .sub{color:var(--muted);font-size:.85rem;margin:.1rem 0 .7rem}
   .row{display:flex;gap:.5rem;align-items:center}
   .list{border:1px solid var(--line);border-radius:8px;max-height:280px;overflow:auto}
   .item{padding:.5rem .6rem;border-bottom:1px solid var(--line);font-size:.88rem}.item:last-child{border-bottom:0}
-  .item .meta{color:var(--muted);font-size:.75rem}
-  .empty{padding:1rem;color:var(--muted);text-align:center;font-size:.85rem}
-  .approval{background:#fff7e6;border:1px solid #f0d79a;border-radius:8px;padding:.6rem .7rem;margin-bottom:.6rem}
-  pre.snip{background:#221b33;color:#e4dcf3;padding:.7rem .8rem;border-radius:8px;font-size:.78rem;white-space:pre-wrap;overflow:auto}
-  code{background:#eef;padding:.08em .35em;border-radius:4px}
+  .item .meta{color:var(--faint);font-size:.75rem;font-family:var(--mono)}
+  .empty{padding:1rem;color:var(--faint);text-align:center;font-size:.85rem}
+  .approval{background:var(--warn-soft);border:1px solid rgba(224,179,65,.32);border-radius:8px;padding:.6rem .7rem;margin-bottom:.6rem}
+  pre.snip{background:var(--bg);border:1px solid var(--line);color:var(--muted);padding:.8rem .9rem;border-radius:8px;font-family:var(--mono);font-size:.78rem;white-space:pre-wrap;overflow:auto}
+  code{background:var(--panel-2);border:1px solid var(--line);padding:.08em .35em;border-radius:4px;font-family:var(--mono)}
   .lockwrap{min-height:70vh;display:flex;align-items:center;justify-content:center}
-  .lockcard{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:1.6rem;max-width:25rem;width:100%}
-  .warn{background:#fbeaea;border:1px solid #e7bcbc;color:#7a2b2b;font-size:.8rem;padding:.55rem .7rem;border-radius:8px;margin:.6rem 0}
+  .lockcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:1.6rem;max-width:25rem;width:100%}
+  .lockcard h2{margin-top:0;font-size:1.05rem;font-weight:600}
+  .warn{background:var(--warn-soft);border:1px solid rgba(224,179,65,.32);color:#e7c878;font-size:.8rem;padding:.55rem .7rem;border-radius:8px;margin:.6rem 0}
   .err{color:var(--bad);font-size:.83rem;min-height:1.1rem}
   .hidden{display:none}
-  .pill{font-size:.72rem;padding:.15rem .55rem;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
+  .pill{font-family:var(--mono);font-size:.7rem;padding:.18rem .6rem;border-radius:999px;border:1px solid var(--line);color:var(--muted)}
 </style>
 </head>
 <body>
 <header>
-  <span class="brand">🔮 Show<span class="s">stone</span></span>
+  <span class="brand"><span class="sq">🔮</span>Show<span class="s">stone</span></span>
   <span class="tag">Personal · Private · Portable</span>
   <span class="spacer"></span>
   <span id="strictPill" class="pill hidden"></span>
