@@ -46,53 +46,73 @@ type Runtime struct {
 	liveDir string
 }
 
+const (
+	// restoreMarker is written into the live dir once a restore completes, so crash
+	// recovery can tell a real (post-restore) session from a kill-mid-untar partial dir.
+	// It is never sealed (excluded by the profile tar).
+	restoreMarker = ".showstone-restore-ok"
+	// AAD domains bind each sealed blob to its purpose so the two files (same DEK) can't
+	// be swapped for one another.
+	domainProfile = "showstone/profile/v1"
+	domainState   = "showstone/state/v1"
+)
+
 func statePath(dataDir string) string {
 	return filepath.Join(dataDir, "showstone", "showstone.state.enc")
 }
 
-// Open unlocks Showstone with an injected DEK. The dek is adopted and wiped on Lock.
-func Open(ctx context.Context, layout paths.Layout, dek []byte, opt Options) (*Runtime, error) {
-	r := &Runtime{layout: layout, opt: opt, liveDir: layout.LiveDir(),
-		keys: secret.NewKeyStore(dek)}
+// Open unlocks Showstone with an injected DEK (adopted, wiped on Lock or on any Open
+// failure). It acquires the single-instance lock, recovers any crash-left profile,
+// restores the sealed profile onto the stick, launches Chromium, and serves.
+func Open(ctx context.Context, layout paths.Layout, dek []byte, opt Options) (rt *Runtime, err error) {
+	r := &Runtime{layout: layout, opt: opt, liveDir: layout.LiveDir(), keys: secret.NewKeyStore(dek)}
+	// On ANY failure, wipe the adopted DEK and release the lock (success transfers
+	// ownership to r.Lock). Named returns make this cover every error path.
+	defer func() {
+		if err != nil {
+			r.keys.Zero()
+			r.teardownLock()
+		}
+	}()
 
 	encPath := layout.ProfileEncPath()
-	if err := os.MkdirAll(filepath.Dir(encPath), 0o700); err != nil {
-		r.keys.Zero()
-		return nil, err
+	if merr := os.MkdirAll(filepath.Dir(encPath), 0o700); merr != nil {
+		return nil, merr
 	}
-	lock, err := acquireLock(encPath + ".lock")
-	if err != nil {
-		r.keys.Zero()
-		return nil, err
+	lock, lerr := acquireLock(encPath + ".lock")
+	if lerr != nil {
+		return nil, lerr
 	}
 	r.lock = lock
 
-	// Crash recovery: a leftover live dir means a previous run didn't Lock cleanly.
-	// Reseal it (don't lose the session) then restore from the seal — one code path.
+	// Crash recovery for a leftover live dir from an UNCLEAN shutdown:
+	//  - marker present  → a real post-restore session (newer than .enc) → reseal it.
+	//  - marker absent    → a kill-mid-untar partial dir → discard; restore from .enc.
 	if dirExists(r.liveDir) {
-		if err := r.resealStale(); err != nil {
-			r.teardownLock()
-			return nil, fmt.Errorf("recover stale profile: %w", err)
+		if fileExists(filepath.Join(r.liveDir, restoreMarker)) {
+			if rerr := r.resealStale(); rerr != nil {
+				return nil, fmt.Errorf("recover stale profile: %w", rerr)
+			}
+		} else if rmErr := os.RemoveAll(r.liveDir); rmErr != nil {
+			return nil, rmErr
 		}
 	}
 
-	chromeBin, err := browser.ResolveChrome(ctx, layout.ChromeDir(), opt.OnDownload)
-	if err != nil {
-		r.teardownLock()
-		return nil, err
+	chromeBin, cerr := browser.ResolveChrome(ctx, layout.ChromeDir(), opt.OnDownload)
+	if cerr != nil {
+		return nil, cerr
 	}
 
-	if err := r.restoreProfile(); err != nil {
-		r.teardownLock()
-		return nil, err
+	if rerr := r.restoreProfile(); rerr != nil {
+		_ = os.RemoveAll(r.liveDir) // never leave a partial plaintext dir behind
+		return nil, rerr
 	}
 
-	eng, err := browser.OpenRod(ctx, browser.RodOptions{
+	eng, oerr := browser.OpenRod(ctx, browser.RodOptions{
 		ChromeBin: chromeBin, LiveDir: r.liveDir, Headless: opt.Headless, NoSandbox: opt.NoSandbox})
-	if err != nil {
+	if oerr != nil {
 		_ = os.RemoveAll(r.liveDir)
-		r.teardownLock()
-		return nil, err
+		return nil, oerr
 	}
 	r.eng = eng
 
@@ -145,12 +165,16 @@ func (r *Runtime) teardownLock() {
 	}
 }
 
-// restoreProfile unseals+untars the profile into the live dir, or creates an empty one.
+// restoreProfile unseals+untars the profile into the live dir (or creates an empty one
+// on first launch), then writes the restore-complete marker as its final step.
 func (r *Runtime) restoreProfile() error {
 	enc := r.layout.ProfileEncPath()
 	b, err := os.ReadFile(enc)
 	if os.IsNotExist(err) {
-		return os.MkdirAll(r.liveDir, 0o700) // first launch: empty profile
+		if mkErr := os.MkdirAll(r.liveDir, 0o700); mkErr != nil { // first launch: empty profile
+			return mkErr
+		}
+		return r.markRestored()
 	}
 	if err != nil {
 		return err
@@ -159,15 +183,22 @@ func (r *Runtime) restoreProfile() error {
 	if err != nil {
 		return err
 	}
-	var tar []byte
+	var tarBytes []byte
 	if err := r.keys.Use(func(dek []byte) error {
-		t, oerr := secret.OpenBlob(dek, sealed)
-		tar = t
+		t, oerr := secret.OpenBlobAAD(dek, sealed, []byte(domainProfile))
+		tarBytes = t
 		return oerr
 	}); err != nil {
 		return err
 	}
-	return untar(tar, r.liveDir)
+	if err := untar(tarBytes, r.liveDir); err != nil {
+		return err
+	}
+	return r.markRestored()
+}
+
+func (r *Runtime) markRestored() error {
+	return os.WriteFile(filepath.Join(r.liveDir, restoreMarker), []byte("ok"), 0o600)
 }
 
 // sealProfile tars the live dir and writes the sealed profile atomically.
@@ -178,7 +209,7 @@ func (r *Runtime) sealProfile() error {
 	}
 	var sealed secret.Sealed
 	if err := r.keys.Use(func(dek []byte) error {
-		s, serr := secret.SealBlob(dek, tarBytes)
+		s, serr := secret.SealBlobAAD(dek, tarBytes, []byte(domainProfile))
 		sealed = s
 		return serr
 	}); err != nil {
@@ -187,9 +218,13 @@ func (r *Runtime) sealProfile() error {
 	return atomicWrite(r.layout.ProfileEncPath(), secret.Encode(sealed))
 }
 
-// resealStale captures a crash-left plaintext profile into the seal, then removes it, so
-// Open can proceed via the normal restore path.
+// resealStale captures a crash-left (marker-present) session into the seal, keeping the
+// prior seal as .bak, then removes the plaintext so Open proceeds via the normal path.
 func (r *Runtime) resealStale() error {
+	enc := r.layout.ProfileEncPath()
+	if fileExists(enc) {
+		_ = os.Rename(enc, enc+".bak") // belt-and-braces: retain the previous good seal
+	}
 	if err := r.sealProfile(); err != nil {
 		return err
 	}
@@ -206,7 +241,7 @@ func (r *Runtime) sealState() error {
 	}
 	var sealed secret.Sealed
 	if err := r.keys.Use(func(dek []byte) error {
-		s, serr := secret.SealBlob(dek, b)
+		s, serr := secret.SealBlobAAD(dek, b, []byte(domainState))
 		sealed = s
 		return serr
 	}); err != nil {
@@ -217,19 +252,25 @@ func (r *Runtime) sealState() error {
 
 func (r *Runtime) loadState() {
 	b, err := os.ReadFile(statePath(r.layout.DataDir))
+	if os.IsNotExist(err) {
+		return // first launch — no state yet
+	}
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "showstone: warning: cannot read session state: %v\n", err)
 		return
 	}
 	sealed, err := secret.Decode(b)
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "showstone: warning: session state corrupt (ignored): %v\n", err)
 		return
 	}
 	var plain []byte
 	if r.keys.Use(func(dek []byte) error {
-		p, oerr := secret.OpenBlob(dek, sealed)
+		p, oerr := secret.OpenBlobAAD(dek, sealed, []byte(domainState))
 		plain = p
 		return oerr
 	}) != nil {
+		fmt.Fprintln(os.Stderr, "showstone: warning: session state failed authentication — possible tampering; policy reset to defaults")
 		return
 	}
 	var blob server.StateBlob
@@ -242,3 +283,5 @@ func dirExists(p string) bool {
 	fi, err := os.Stat(p)
 	return err == nil && fi.IsDir()
 }
+
+func fileExists(p string) bool { _, err := os.Stat(p); return err == nil }

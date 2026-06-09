@@ -36,5 +36,14 @@ func atomicWrite(path string, data []byte) error {
 	if err := os.Chmod(name, 0o600); err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	if err := os.Rename(name, path); err != nil {
+		return err
+	}
+	// fsync the directory so the rename is durable before Lock() deletes the plaintext
+	// profile (no-op/ignored on Windows, where removable media defaults to write-through).
+	if d, derr := os.Open(dir); derr == nil {
+		_ = d.Sync()
+		_ = d.Close()
+	}
+	return nil
 }

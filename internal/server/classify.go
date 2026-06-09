@@ -1,11 +1,29 @@
 package server
 
 import (
+	"net/url"
 	"strings"
 
 	"mykeep.ai/showstone/internal/approver"
 	"mykeep.ai/showstone/internal/browser"
 )
+
+// allowedNavURL restricts navigation to safe web schemes — blocks file://, chrome://,
+// chrome-devtools://, view-source://, data: (as a top-level nav), etc., which a
+// prompt-injected agent could otherwise use to read local files or browser internals
+// and exfiltrate them via the snapshot/screenshot response.
+func allowedNavURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil {
+		return false
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "about":
+		return true
+	default:
+		return false
+	}
+}
 
 // sensitiveLexicon: a click whose element name/role contains one of these blocks for
 // approval (unless the host is trusted). Intentionally broad — false positives just ask.
@@ -51,11 +69,40 @@ func (s *Server) classify(req browser.ActRequest, el browser.Element, curURL str
 			return false, true, base // soft
 		}
 		return false, false, approver.Request{}
+	case "press":
+		// Enter/Space activate the focused control (submit a form, click a button) —
+		// the same effect as a click, so gate it the same way.
+		if isActivatorKey(req.Key) {
+			base.Action = "submit"
+			if matchesLexicon(el.Name) || matchesLexicon(el.Role) {
+				base.Action = "click"
+			}
+			if isSecretField(el) {
+				return true, false, base // hard: Enter in a password/payment field
+			}
+			return false, true, base // soft
+		}
+		return false, false, approver.Request{} // Tab/arrows/Esc/etc. are benign
+	case "select":
+		// Choosing an option can arm a sensitive flow (plan tier, saved address…).
+		if matchesLexicon(el.Name) || matchesLexicon(el.Role) || matchesLexicon(req.Value) {
+			base.Action = "select"
+			return false, true, base // soft
+		}
+		return false, false, approver.Request{}
 	default:
-		// select/press/scroll/back/forward/reload/wait/navigate are benign here;
-		// navigate's cross-host gate (and strict mode) is handled at the call site.
+		// scroll/back/forward/reload/wait are benign; navigate's gate (and strict mode)
+		// is applied in the act/navigate handler, not here.
 		return false, false, approver.Request{}
 	}
+}
+
+func isActivatorKey(k string) bool {
+	switch k {
+	case "Enter", "Return", "Space", " ":
+		return true
+	}
+	return false
 }
 
 func isSecretField(el browser.Element) bool {

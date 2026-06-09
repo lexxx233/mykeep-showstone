@@ -38,6 +38,17 @@ func envFromSnap(s browser.Snapshot) envelope {
 	els := s.Elements
 	if els == nil {
 		els = []browser.Element{}
+	} else {
+		// Defense in depth: never return a secret field's VALUE to the agent (the
+		// engine's snapshot.js also redacts, but a future engine change must not leak).
+		out := make([]browser.Element, len(els))
+		copy(out, els)
+		for i := range out {
+			if isSecretField(out[i]) && out[i].Value != "" {
+				out[i].Value = ""
+			}
+		}
+		els = out
 	}
 	return envelope{
 		OK: true, URL: s.URL, Title: s.Title, Loading: s.Loading,

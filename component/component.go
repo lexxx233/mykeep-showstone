@@ -10,6 +10,7 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"sync"
 	"time"
 
 	"mykeep.ai/showstone/internal/browser"
@@ -46,7 +47,9 @@ type Options struct {
 type Component struct {
 	opts   Options
 	layout paths.Layout
-	rt     *runtime.Runtime
+
+	mu sync.Mutex
+	rt *runtime.Runtime
 }
 
 // New builds a locked component bound to a data dir. Cheap: no launch, no crypto, no I/O.
@@ -77,20 +80,27 @@ func (c *Component) Unlock(ctx context.Context, dek []byte) error {
 	if err != nil {
 		return err
 	}
+	c.mu.Lock()
 	c.rt = rt
+	c.mu.Unlock()
 	return nil
 }
 
 // Mount attaches Showstone's USE plane (/v1/showstone/) + CONTROL plane
 // (/api/showstone/) onto the shared suite mux.
 func (c *Component) Mount(mux *http.ServeMux) {
-	if c.rt != nil {
-		c.rt.Server().Mount(mux)
+	c.mu.Lock()
+	rt := c.rt
+	c.mu.Unlock()
+	if rt != nil {
+		rt.Server().Mount(mux)
 	}
 }
 
 // UseToken / ControlToken expose the minted tokens (after Unlock) for the snippet/GUI.
 func (c *Component) UseToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.rt == nil {
 		return ""
 	}
@@ -98,6 +108,8 @@ func (c *Component) UseToken() string {
 }
 
 func (c *Component) ControlToken() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.rt == nil {
 		return ""
 	}
@@ -106,10 +118,12 @@ func (c *Component) ControlToken() string {
 
 // Lock kills the browser, reseals the profile, and zeroizes the key. Idempotent.
 func (c *Component) Lock() error {
-	if c.rt == nil {
+	c.mu.Lock()
+	rt := c.rt
+	c.rt = nil
+	c.mu.Unlock()
+	if rt == nil {
 		return nil
 	}
-	err := c.rt.Lock()
-	c.rt = nil
-	return err
+	return rt.Lock()
 }

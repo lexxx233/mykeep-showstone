@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -224,6 +225,11 @@ func (s *Server) navigate(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, 400, "bad_request")
 		return
 	}
+	if !allowedNavURL(body.URL) {
+		s.logAction(r, "navigate", "", body.URL, "", "blocked_scheme")
+		writeErr(w, 400, "scheme_not_allowed")
+		return
+	}
 	host := hostOf(body.URL)
 	// plain navigation is auto unless strict mode is on.
 	dec, allowed := s.gate(r.Context(), approver.Request{Action: "navigate", Host: host, URL: body.URL}, false, false)
@@ -256,6 +262,11 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req := dto.toReq()
+	if req.Action == "navigate" && !allowedNavURL(req.URL) {
+		s.logAction(r, "navigate", "", req.URL, "", "blocked_scheme")
+		writeErr(w, 400, "scheme_not_allowed")
+		return
+	}
 
 	// classify (needs the element for click/type/select targeted by index)
 	var el browser.Element
@@ -266,6 +277,29 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	}
 	st, _ := s.eng.State(r.Context())
 	hard, soft, cr := s.classify(req, el, st.URL)
+
+	// Fail closed on the selector escape hatch: the classifier never resolved the
+	// element by selector, so a selector-targeted mutating action is unclassifiable —
+	// route it through a hard gate (never auto, even on a trusted host) rather than
+	// letting an empty element classify as benign.
+	if req.Selector != "" && isMutatingAction(req.Action) {
+		hard, soft = true, false
+		cr = approver.Request{Action: req.Action, Host: hostOf(st.URL), URL: st.URL, Label: "selector:" + req.Selector}
+	}
+
+	// Ensure act-driven navigation and (under strict mode) every action go through the
+	// gate even when classify deemed them benign — otherwise /act bypasses the dedicated
+	// /navigate gate and the strict-mode kill switch.
+	s.mu.Lock()
+	strict := s.strict
+	s.mu.Unlock()
+	if cr.Action == "" {
+		if req.Action == "navigate" {
+			cr = approver.Request{Action: "navigate", Host: hostOf(req.URL), URL: req.URL}
+		} else if strict {
+			cr = approver.Request{Action: req.Action, Host: hostOf(st.URL), URL: st.URL, Label: el.Name}
+		}
+	}
 
 	decision := "auto"
 	if cr.Action != "" {
@@ -281,6 +315,7 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 	snap, err := s.eng.Act(r.Context(), req)
 	if err != nil {
 		// stale_snapshot / index_out_of_range carry a fresh snapshot so the agent recovers.
+		s.logAction(r, req.Action, hostOf(st.URL), st.URL, el.Name, "error")
 		env := envFromSnap(snap)
 		env.OK = false
 		env.Error = errCode(err)
@@ -301,25 +336,32 @@ func (s *Server) act(w http.ResponseWriter, r *http.Request) {
 // click / type are thin sugar over act.
 func (s *Server) click(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Index      *int `json:"index"`
-		Screenshot bool `json:"screenshot"`
+		Index      *int   `json:"index"`
+		Selector   string `json:"selector"`
+		SnapshotID string `json:"snapshot_id"`
+		Screenshot bool   `json:"screenshot"`
 	}
 	if !decode(w, r, &b) {
 		return
 	}
-	s.actInline(w, r, actDTO{Action: "click", Index: b.Index, Screenshot: b.Screenshot})
+	s.actInline(w, r, actDTO{Action: "click", Index: b.Index, Selector: b.Selector,
+		SnapshotID: b.SnapshotID, Screenshot: b.Screenshot})
 }
 
 func (s *Server) typeAct(w http.ResponseWriter, r *http.Request) {
 	var b struct {
-		Index  *int   `json:"index"`
-		Text   string `json:"text"`
-		Submit bool   `json:"submit"`
+		Index      *int   `json:"index"`
+		Selector   string `json:"selector"`
+		Text       string `json:"text"`
+		Submit     bool   `json:"submit"`
+		SnapshotID string `json:"snapshot_id"`
+		Screenshot bool   `json:"screenshot"`
 	}
 	if !decode(w, r, &b) {
 		return
 	}
-	s.actInline(w, r, actDTO{Action: "type", Index: b.Index, Text: b.Text, Submit: b.Submit})
+	s.actInline(w, r, actDTO{Action: "type", Index: b.Index, Selector: b.Selector, Text: b.Text,
+		Submit: b.Submit, SnapshotID: b.SnapshotID, Screenshot: b.Screenshot})
 }
 
 // --- CONTROL plane ---
@@ -501,11 +543,13 @@ func (s *Server) gate(ctx context.Context, cr approver.Request, hard, soft bool)
 		return "auto", true
 	}
 	ok, err := s.approver.Confirm(ctx, cr)
-	if err != nil {
+	switch {
+	case errors.Is(err, approver.ErrTimeout):
 		return "timeout", false
-	}
-	if !ok {
-		return "denied", false
+	case err != nil:
+		return "cancelled", false // client context cancelled
+	case !ok:
+		return "denied", false // explicit human deny
 	}
 	return "approved", true
 }
@@ -551,4 +595,12 @@ func hostOf(raw string) string {
 		return ""
 	}
 	return u.Hostname()
+}
+
+func isMutatingAction(a string) bool {
+	switch a {
+	case "click", "type", "select", "press":
+		return true
+	}
+	return false
 }

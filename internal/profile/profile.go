@@ -6,6 +6,7 @@ package profile
 import (
 	"archive/tar"
 	"bytes"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -29,10 +30,10 @@ func excluded(rel string) bool {
 			return true
 		}
 	}
-	// transient lock/temp files
+	// transient lock/temp files + Showstone's own live-dir markers (never sealed)
 	base := filepath.Base(rel)
 	if base == "SingletonLock" || base == "SingletonSocket" || base == "SingletonCookie" ||
-		strings.HasSuffix(base, ".tmp") {
+		strings.HasSuffix(base, ".tmp") || strings.HasPrefix(base, ".showstone-") {
 		return true
 	}
 	return false
@@ -116,9 +117,10 @@ func Untar(blob []byte, dir string) error {
 		}
 		name := filepath.FromSlash(hdr.Name)
 		target := filepath.Join(dir, name)
-		// path-traversal guard: target must stay within dir
+		// path-traversal guard: fail closed — a legitimate (AEAD-authenticated) blob
+		// never contains an escaping entry, so one signals corruption/tampering.
 		if rel, rerr := filepath.Rel(dir, target); rerr != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
-			continue
+			return fmt.Errorf("profile: tar entry %q escapes target dir", hdr.Name)
 		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:

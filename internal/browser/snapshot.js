@@ -29,14 +29,20 @@
     seen.add(el);
     el.setAttribute('data-showstone-idx', String(idx));
     const tag = el.tagName.toLowerCase();
-    const name = (el.getAttribute('aria-label') || (el.innerText || '').trim() || el.value ||
+    const itype = tag === 'input' ? (el.getAttribute('type') || 'text') : '';
+    // Never expose secret field VALUES (passwords, card numbers) to the agent.
+    const hay = ((el.getAttribute('name') || '') + ' ' + (el.getAttribute('placeholder') || '') +
+      ' ' + (el.getAttribute('aria-label') || '')).toLowerCase();
+    const secret = itype.toLowerCase() === 'password' ||
+      /password|card|cvv|cvc|credit|iban|ssn|social security|account number/.test(hay);
+    const name = (el.getAttribute('aria-label') || (el.innerText || '').trim() || (secret ? '' : el.value) ||
       el.getAttribute('placeholder') || el.getAttribute('title') || el.getAttribute('alt') || '')
       .replace(/\s+/g, ' ').trim().slice(0, 200);
     const r = el.getBoundingClientRect();
     const isCheck = el.type === 'checkbox' || el.type === 'radio';
     elements.push({
       index: idx, role: roleFor(el, tag), tag: tag, name: name,
-      value: (el.value || '').slice(0, 200),
+      value: secret ? '' : (el.value || '').slice(0, 200),
       placeholder: el.getAttribute('placeholder') || '',
       href: el.getAttribute('href') || '',
       input_type: tag === 'input' ? (el.getAttribute('type') || 'text') : '',

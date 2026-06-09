@@ -109,6 +109,14 @@ func SealBlob(dek, plaintext []byte) (Sealed, error) { return seal(dek, plaintex
 // OpenBlob decrypts a sealed blob under the DEK.
 func OpenBlob(dek []byte, s Sealed) ([]byte, error) { return open(dek, s, nil) }
 
+// SealBlobAAD / OpenBlobAAD bind a domain string as additional authenticated data, so a
+// blob sealed for one purpose (e.g. the profile) cannot be swapped in for another (e.g.
+// the session state) under the same DEK — the GCM tag fails on a domain mismatch.
+func SealBlobAAD(dek, plaintext, aad []byte) (Sealed, error) { return seal(dek, plaintext, aad) }
+
+// OpenBlobAAD decrypts a blob sealed with the given domain AAD.
+func OpenBlobAAD(dek []byte, s Sealed, aad []byte) ([]byte, error) { return open(dek, s, aad) }
+
 // Encode lays a Sealed out as [nonce][ciphertext] for on-disk storage.
 func Encode(s Sealed) []byte {
 	out := make([]byte, 0, len(s.Nonce)+len(s.Ciphertext))

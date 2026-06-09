@@ -7,6 +7,7 @@ package gui
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	_ "embed"
 	"encoding/hex"
 	"encoding/json"
@@ -40,6 +41,10 @@ type App struct {
 	idle    time.Duration
 	comp    *showstone.Component
 
+	baseCtx  context.Context    // cancelled on shutdown to abort an in-flight unlock
+	cancel   context.CancelFunc
+	unlockWG sync.WaitGroup     // an in-flight unlock; shutdown waits for it before sealing
+
 	mu       sync.Mutex
 	apiH     http.Handler // component planes; nil when locked
 	session  string
@@ -52,6 +57,7 @@ type App struct {
 // per-process control session; Unlock launches it.
 func New(layout paths.Layout, version, addr string, idle time.Duration) (*App, error) {
 	a := &App{layout: layout, version: version, addr: addr, idle: idle, session: randHex(32)}
+	a.baseCtx, a.cancel = context.WithCancel(context.Background())
 	comp, err := showstone.New(showstone.Options{
 		DataDir: layout.DataDir, Portable: layout.Portable, Version: version,
 		Headless:  os.Getenv("SHOWSTONE_HEADLESS") == "1",
@@ -90,11 +96,15 @@ func (a *App) Run() error {
 		select {
 		case <-sig:
 			fmt.Fprintln(os.Stderr, "\nshutting down: sealing the browser profile…")
+			a.cancel() // abort an in-flight unlock (e.g. a slow first-launch download)
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			_ = httpSrv.Shutdown(ctx)
 			cancel()
+			a.unlockWG.Wait() // let an in-flight unlock fully unwind, then seal whatever it produced
 			return a.lockNow()
 		case e := <-errCh:
+			a.cancel()
+			a.unlockWG.Wait()
 			_ = a.lockNow()
 			return e
 		case <-ticker.C:
@@ -122,14 +132,14 @@ func (a *App) index(w http.ResponseWriter, _ *http.Request) {
 	_, _ = w.Write(indexHTML)
 }
 
-func (a *App) state(w http.ResponseWriter, _ *http.Request) {
+func (a *App) state(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	unlocked := a.apiH != nil
 	loading := a.loading
 	pct := a.pct
 	a.mu.Unlock()
 	tok := ""
-	if unlocked {
+	if unlocked && a.hasSession(r) { // only the human's session sees the agent token
 		tok = a.comp.UseToken()
 	}
 	writeJSON(w, 200, map[string]any{
@@ -199,9 +209,15 @@ func (a *App) open(w http.ResponseWriter, r *http.Request, firstLaunch bool) {
 		}
 		dek = d
 	}
+	defer wipe(dek) // NewKeyStore copies the DEK; wipe our caller-side slice
 
-	if err := a.comp.Unlock(r.Context(), dek); err != nil {
-		writeErr(w, 500, err.Error())
+	// Use the app context (cancelled on shutdown) so a slow first-launch unlock aborts;
+	// track it so shutdown waits for it to unwind before sealing.
+	a.unlockWG.Add(1)
+	uerr := a.comp.Unlock(a.baseCtx, dek)
+	a.unlockWG.Done()
+	if uerr != nil {
+		writeErr(w, 500, uerr.Error())
 		return
 	}
 	mux := http.NewServeMux()
@@ -216,10 +232,20 @@ func (a *App) open(w http.ResponseWriter, r *http.Request, firstLaunch bool) {
 	writeJSON(w, 200, map[string]any{"unlocked": true, "use_token": a.comp.UseToken()})
 }
 
-func (a *App) lock(w http.ResponseWriter, _ *http.Request) {
+func (a *App) lock(w http.ResponseWriter, r *http.Request) {
+	if !a.hasSession(r) { // only the human's session may seal the profile
+		writeErr(w, 401, "unauthorized")
+		return
+	}
 	_ = a.lockNow()
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: "", Path: "/", MaxAge: -1})
 	writeJSON(w, 200, map[string]any{"unlocked": false})
+}
+
+// hasSession reports whether the request carries the master session cookie set at unlock.
+func (a *App) hasSession(r *http.Request) bool {
+	c, err := r.Cookie(sessionCookie)
+	return err == nil && subtle.ConstantTimeCompare([]byte(c.Value), []byte(a.session)) == 1
 }
 
 func (a *App) lockNow() error {
@@ -246,15 +272,13 @@ func (a *App) maybeIdleLock() {
 	}
 }
 
-func (a *App) snippet(w http.ResponseWriter, _ *http.Request) {
+func (a *App) snippet(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
-	tok := ""
-	if a.apiH != nil {
-		tok = a.comp.UseToken()
-	}
+	unlocked := a.apiH != nil
 	a.mu.Unlock()
-	if tok == "" {
-		tok = "<shown after unlock>"
+	tok := "<shown after unlock>"
+	if unlocked && a.hasSession(r) {
+		tok = a.comp.UseToken()
 	}
 	base := "http://" + a.addr
 	snip := "You can drive a local browser (Showstone) at " + base + " :\n" +

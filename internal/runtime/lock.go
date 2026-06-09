@@ -3,58 +3,35 @@ package runtime
 import (
 	"errors"
 	"os"
-	"strconv"
-	"strings"
-	"syscall"
 )
 
 // ErrAlreadyRunning means another Showstone instance holds this profile.
 var ErrAlreadyRunning = errors.New("showstone: another instance has this profile open")
 
-// instanceLock is a portable single-writer guard: an exclusive lock file storing the
-// owner PID. A stale lock (owner dead) is stolen. On unix this is precise; on Windows
-// liveness can't be probed, so the lock is best-effort (documented).
-type instanceLock struct{ path string }
+// instanceLock is a real kernel-held single-writer lock (flock on unix, LockFileEx on
+// Windows) kept open for the process lifetime. The kernel releases it automatically if
+// the process dies, so there are no stale-steal races and no Windows always-steal hole.
+type instanceLock struct{ f *os.File }
 
 func acquireLock(path string) (*instanceLock, error) {
-	for attempt := 0; attempt < 2; attempt++ {
-		f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-		if err == nil {
-			_, _ = f.WriteString(strconv.Itoa(os.Getpid()))
-			_ = f.Close()
-			return &instanceLock{path: path}, nil
-		}
-		if !os.IsExist(err) {
-			return nil, err
-		}
-		if stale(path) {
-			_ = os.Remove(path)
-			continue
-		}
-		return nil, ErrAlreadyRunning
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
 	}
-	return nil, ErrAlreadyRunning
+	if err := lockFile(f); err != nil {
+		_ = f.Close()
+		if errors.Is(err, errLocked) {
+			return nil, ErrAlreadyRunning
+		}
+		return nil, err
+	}
+	return &instanceLock{f: f}, nil
 }
 
 func (l *instanceLock) release() {
-	if l != nil {
-		_ = os.Remove(l.path)
+	if l == nil || l.f == nil {
+		return
 	}
-}
-
-func stale(path string) bool {
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return true
-	}
-	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
-	if err != nil || pid <= 0 {
-		return true
-	}
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return true
-	}
-	// Signal(0) probes liveness on unix; on Windows it errors (treat as stale → steal).
-	return p.Signal(syscall.Signal(0)) != nil
+	_ = unlockFile(l.f)
+	_ = l.f.Close()
 }

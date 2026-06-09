@@ -8,9 +8,14 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"sync"
 	"time"
 )
+
+// ErrTimeout means no human decided before the deadline (fail-closed → deny). Distinct
+// from a cancelled request so the audit log can tell "operator absent" from "denied".
+var ErrTimeout = errors.New("approval timed out")
 
 // Request describes the action awaiting a human decision (shown on the GUI card).
 type Request struct {
@@ -74,7 +79,7 @@ func (a *Approver) Confirm(ctx context.Context, r Request) (bool, error) {
 	case ok := <-pr.ch:
 		return ok, nil
 	case <-timer.C:
-		return false, nil // fail-closed
+		return false, ErrTimeout // fail-closed
 	case <-ctx.Done():
 		return false, ctx.Err()
 	}

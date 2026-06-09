@@ -69,6 +69,9 @@ func OpenRod(ctx context.Context, opt RodOptions) (Engine, error) {
 		l.Kill()
 		return nil, fmt.Errorf("connect chrome: %w", err)
 	}
+	// Structurally deny browser-initiated downloads — a heuristic on <a href> extensions
+	// can't catch every download vector, so the agent must not be able to write files.
+	_ = proto.BrowserSetDownloadBehavior{Behavior: proto.BrowserSetDownloadBehaviorBehaviorDeny}.Call(br)
 	pg, err := br.Page(proto.TargetCreateTarget{URL: "about:blank"})
 	if err != nil {
 		_ = br.Close()
@@ -82,9 +85,15 @@ func (e *rodEngine) pg(ctx context.Context) *rod.Page {
 	return e.page.Context(ctx).Timeout(opTimeout)
 }
 
+// closed reports whether the engine has been Closed (page nil). Callers hold e.mu.
+func (e *rodEngine) closed() bool { return e.page == nil }
+
 func (e *rodEngine) Navigate(ctx context.Context, url string) (Snapshot, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed() {
+		return Snapshot{}, ErrNoPage
+	}
 	p := e.pg(ctx)
 	if err := p.Navigate(url); err != nil {
 		return Snapshot{}, ErrNavBlocked
@@ -96,12 +105,18 @@ func (e *rodEngine) Navigate(ctx context.Context, url string) (Snapshot, error) 
 func (e *rodEngine) Snapshot(ctx context.Context, page int) (Snapshot, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed() {
+		return Snapshot{}, ErrNoPage
+	}
 	return e.snapshot(ctx, page)
 }
 
 func (e *rodEngine) Act(ctx context.Context, req ActRequest) (Snapshot, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed() {
+		return Snapshot{}, ErrNoPage
+	}
 	if req.SnapshotID != "" && req.SnapshotID != e.snapshotID {
 		snap, _ := e.snapshot(ctx, 1)
 		return snap, ErrStaleSnapshot
@@ -221,6 +236,9 @@ func (e *rodEngine) resolve(p *rod.Page, req ActRequest) (*rod.Element, error) {
 func (e *rodEngine) Screenshot(ctx context.Context, full bool) (Screenshot, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed() {
+		return Screenshot{}, ErrNoPage
+	}
 	png, err := e.pg(ctx).Screenshot(full, nil)
 	if err != nil {
 		return Screenshot{}, err
@@ -235,6 +253,9 @@ func (e *rodEngine) Screenshot(ctx context.Context, full bool) (Screenshot, erro
 func (e *rodEngine) State(ctx context.Context) (State, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed() {
+		return State{}, ErrNoPage
+	}
 	p := e.pg(ctx)
 	info, err := p.Info()
 	if err != nil {
@@ -261,6 +282,9 @@ func (e *rodEngine) Element(index int) (Element, bool) {
 func (e *rodEngine) Fill(ctx context.Context, index int, value string) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed() {
+		return ErrNoPage
+	}
 	p := e.pg(ctx)
 	el, err := e.resolve(p, ActRequest{Index: index})
 	if err != nil {
@@ -272,6 +296,9 @@ func (e *rodEngine) Fill(ctx context.Context, index int, value string) error {
 func (e *rodEngine) ClearSession(ctx context.Context) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed() {
+		return ErrNoPage
+	}
 	p := e.pg(ctx)
 	_ = proto.NetworkClearBrowserCookies{}.Call(p)
 	_, _ = p.Eval(`() => { try{localStorage.clear();sessionStorage.clear();}catch(e){} }`)
@@ -281,6 +308,9 @@ func (e *rodEngine) ClearSession(ctx context.Context) error {
 func (e *rodEngine) Profile(ctx context.Context) ([]HostCookies, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
+	if e.closed() {
+		return nil, ErrNoPage
+	}
 	res, err := proto.NetworkGetAllCookies{}.Call(e.pg(ctx))
 	if err != nil {
 		return nil, err

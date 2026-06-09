@@ -29,11 +29,12 @@ var platform = map[string]struct{ token, binRel string }{
 	"darwin/arm64":  {"mac-arm64", "chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"},
 }
 
-// pinnedSHA256 is the per-token SHA-256 of the CfT zip. Verified when present; entries
-// are filled at release time. (CfT serves over TLS from a fixed URL; an empty entry
-// falls back to TLS trust with a logged note.)
+// pinnedSHA256 is the per-token SHA-256 of the CfT zip, verified when present. When a
+// token's entry is empty the download is trusted on TLS alone (from the fixed Google
+// URL) and ensureDownloaded prints a warning to stderr. Populate these at release time
+// to harden the supply chain.
 var pinnedSHA256 = map[string]string{
-	// "linux64": "…", populated at release after `make verify-chrome`.
+	// "linux64": "<sha256 of chrome-linux64.zip for PinnedChromeVersion>",
 }
 
 func zipURL(version, token string) string {
@@ -78,8 +79,12 @@ func ensureDownloaded(ctx context.Context, chromeDir, token, binRel string, onPr
 		return "", err
 	}
 	defer os.Remove(tmpZip)
-	if want := pinnedSHA256[token]; want != "" && want != sum {
-		return "", fmt.Errorf("showstone: chrome zip checksum mismatch for %s", token)
+	if want := pinnedSHA256[token]; want != "" {
+		if want != sum {
+			return "", fmt.Errorf("showstone: chrome zip checksum mismatch for %s", token)
+		}
+	} else {
+		fmt.Fprintf(os.Stderr, "showstone: warning: no pinned checksum for %s — trusting TLS for the ~150 MB engine download\n", token)
 	}
 	// extract into a temp dir then rename, so a crash mid-extract never leaves a half dir.
 	stage := dst + ".dl"

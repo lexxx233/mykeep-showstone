@@ -73,7 +73,11 @@ func cmdGUI() error {
 }
 
 func cmdServe() error {
-	ctx := context.Background()
+	// Install the signal handler BEFORE unlock so Ctrl-C during the (possibly multi-minute)
+	// first-launch download / profile untar cancels the context and unwinds cleanly,
+	// rather than killing the process mid-untar.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 	layout, err := paths.Resolve()
 	if err != nil {
 		return err
@@ -94,8 +98,10 @@ func cmdServe() error {
 		return err
 	}
 	fmt.Fprintln(os.Stderr, "launching browser…")
-	if err := comp.Unlock(ctx, dek); err != nil {
-		return err
+	uerr := comp.Unlock(ctx, dek)
+	wipe(dek) // NewKeyStore copies the DEK; wipe our caller-side slice
+	if uerr != nil {
+		return uerr
 	}
 
 	mux := http.NewServeMux()
@@ -113,16 +119,14 @@ func cmdServe() error {
 	fmt.Printf("  GUI (control) token: %s   ← keep this off the wire\n", comp.ControlToken())
 	fmt.Printf("  the agent fetches its manual at  GET http://%s/v1/showstone/guide\n\n", addr)
 
-	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	select {
-	case <-sig:
+	case <-ctx.Done():
 		fmt.Fprintln(os.Stderr, "\nshutting down: sealing the browser profile…")
 	case e := <-errCh:
 		_ = comp.Lock()
 		return e
 	}
-	shutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	shutCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutCtx)
 	return comp.Lock()
@@ -160,6 +164,9 @@ func unlockDEK(cfgPath string) ([]byte, error) {
 
 func passphrase() []byte {
 	if v := os.Getenv("SHOWSTONE_PASSPHRASE"); v != "" {
+		// Don't leave the KEK passphrase in the environment (readable via /proc and
+		// inherited by the launched Chromium tree).
+		_ = os.Unsetenv("SHOWSTONE_PASSPHRASE")
 		return []byte(v)
 	}
 	fmt.Fprint(os.Stderr, "Showstone passphrase: ")
