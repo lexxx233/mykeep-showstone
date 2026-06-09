@@ -17,7 +17,7 @@ local capabilities any AI agent can plug into, all on a USB stick. A *showstone*
 glass — a stone you gaze into to see distant, hidden things. This one lets your agent see, and act
 on, the live web — in a sandbox you carry, leaving no trace on the host.
 
-Where the **Memory Capsule** makes an agent *know* you, **SecretVault** lets it *act as* you, and
+Where the **Capsule** makes an agent *know* you, **Vault** lets it *act as* you, and
 **Foundry** lets it *do more*, **Showstone** lets it *see the web*: navigate, read, click, fill,
 screenshot, and extract.
 
@@ -39,9 +39,9 @@ binary stays pure-Go/no-CGo; the engine is a bundled Chromium process it launche
 
 Showstone does things a standalone browser can't, because the rest of the suite is right there:
 
-- **SecretVault logs it in *by reference*.** The agent fills a login form using a credential it
+- **Vault logs it in *by reference*.** The agent fills a login form using a credential it
   never sees — so it browses *as you* without your password ever entering its context.
-- **Memory Capsule remembers** what it found, across sessions.
+- **Capsule remembers** what it found, across sessions.
 - **Foundry tools** can request a browsing capability and compose web actions.
 
 > Your agent can see and act on the web, logged in as you, in a sandbox you carry — and it never
@@ -65,7 +65,7 @@ POST /v1/browse/screenshot                                → an image of the pa
   "tiny pure-Go binary" ideal genuinely bends — *pure Go* applies to the **control** plane; the
   engine is native. Ship only the platform(s) you use to keep the stick footprint sane.
 - **Web content is untrusted, and the agent reads it.** A page can try to prompt-inject the agent
-  driving it. As with SecretVault, the honest promise is **bounded + observable**: a contained
+  driving it. As with Vault, the honest promise is **bounded + observable**: a contained
   profile, an audit log of every action, and a human-approval gate for sensitive acts (purchases,
   posts, irreversible clicks). Treat page content as hostile input.
 - **Acting on the web *as you* is powerful.** Containment + audit + approval are the guardrails —
@@ -74,15 +74,15 @@ POST /v1/browse/screenshot                                → an image of the pa
 ## Design principles
 
 - **Portable & contained** — the engine and your sealed profile live on the stick; no host trace.
-- **By reference** — logins come from SecretVault; the agent never holds the secret.
+- **By reference** — logins come from Vault; the agent never holds the secret.
 - **Bounded + observable** — contained profile, audited actions, approval for the dangerous ones.
 - **The agent reasons, mykeep provides** — Showstone drives the browser and records; it does no
   reasoning of its own.
 
 ## Where it fits
 
-- **[Memory Capsule](https://github.com/lexxx233/mykeep-memory-capsule)** — *knows* you.
-- **[SecretVault](https://github.com/lexxx233/mykeep-secretvault)** — *acts as* you.
+- **[Capsule](https://github.com/lexxx233/mykeep-capsule)** — *knows* you.
+- **[Vault](https://github.com/lexxx233/mykeep-vault)** — *acts as* you.
 - **[Foundry](https://github.com/lexxx233/mykeep-foundry)** — *does* more.
 - **Showstone** — *sees* the web.
 
